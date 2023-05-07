@@ -9,43 +9,60 @@ export class GitLab {
 	}
 
 	getMergeRequests(projectId, startDate, endDate) {
-		return new Promise((resolve, reject) => {
-			fetch(`${this.url.href}/projects/${projectId}/merge_requests?created_after=${startDate}&created_before=${endDate}`, { headers: this.headers } )
-			.then(res => res.json())
-			.then(mergeRequests => {
-					resolve(mergeRequests)
-			})
-				.catch(error => {
-					reject(error);
-			})
-		})
+	
+		const fetchPage = (page) => {
+			return new Promise((resolve, reject) => {
+				fetch(
+					`${this.url}api/v4/projects/${projectId}/merge_requests?created_after=${startDate}&created_before=${endDate}&per_page=100&page=${page}`,	{ headers: this.headers }
+				)
+					.then((res) => {
+					const totalPages = parseInt(res.headers.get('X-Total-Pages'), 10);
+	
+					return res.json().then((mergeRequests) => {
+							if (page < totalPages) {
+								fetchPage(page + 1).then((nextPageMergeRequests) => {
+									resolve(mergeRequests.concat(nextPageMergeRequests));
+								});
+							} else {
+								resolve(mergeRequests);
+							}
+						});
+					})
+					.catch((error) => {
+						reject(error);
+					});
+			});
+		}
+		return fetchPage(1);
 	}
 
-
-	getApprovals(projectId, mergeReqId) {
-		return new Promise((resolve, reject) => {
-			fetch(`${this.url.href}/projects/${projectId}/merge_requests/${mergeReqId}/approval_state`, { headers: this.headers } )
-			.then(res => res.json())
-			.then(approvalState => {
-					resolve(approvalState)
-			})
-				.catch(error => {
-					reject(error);
-			})
-		})
-	}
 
 	getNotes(projectId, mergeReqId) {
-		return new Promise((resolve, reject) => {
-			fetch(`${this.url.href}/projects/${projectId}/merge_requests/${mergeReqId}/notes`, { headers: this.headers } )
-			.then(res => res.json())
-			.then(notes => {
-					resolve(notes)
-			})
-				.catch(error => {
-					reject(error);
-			})
-		})
+		const fetchPage = (page) => {
+			return new Promise((resolve, reject) => {
+				fetch(
+					`${this.url}api/v4/projects/${projectId}/merge_requests/${mergeReqId}/notes?per_page=100&page=${page}`,
+					{ headers: this.headers }
+				)
+					.then((res) => {
+						const totalPages = parseInt(res.headers.get('X-Total-Pages'), 10);
+
+						res.json().then((notes) => {
+							if (page < totalPages) {
+								fetchPage(page + 1).then((nextPageNotes) => {
+									resolve(notes.concat(nextPageNotes));
+								});
+							} else {
+								resolve(notes);
+							}
+						});
+					})
+					.catch((error) => {
+						reject(error);
+					});
+			});
+		}
+		return fetchPage(1);
 	}
 }
 
