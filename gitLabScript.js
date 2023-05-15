@@ -11,8 +11,8 @@ const params = {
 const PROJECT_IDS = ['2282', '2061', '2523', '2070'];
 
 // Span of time
-const startDate = new Date('05/01/2023');
-const endDate = new Date('05/08/2023');
+const startDate = new Date('05/08/2023 08:00');
+const endDate = new Date('05/15/2023 20:00');
 
 const RequestHeaders = {
   "Accept": "application/json",
@@ -45,7 +45,7 @@ Promise.all(mergeRequestPromises)
 
 
   // Get the average time a MR spends in CR
-  let listOfMrs =  allMergeRequests.flat(2).filter(mr => mr.merged_at != null);
+  let listOfMrs =  allMergeRequests.flat(2).filter(mr => mr.merged_at !== null);
   averageTime = formatTime(listOfMrs 
   .reduce((acc, curr) => {
     let timeSpent = calcTimeSpent(curr.created_at, curr.merged_at);
@@ -55,13 +55,14 @@ Promise.all(mergeRequestPromises)
   mergeRequests = allMergeRequests
     .flat(2)
     .map(mr => { 
-      timeSpentInCodeReview = calcTimeSpent(mr.created_at, mr.merged_at,  mr.iid);
+      timeSpentInCodeReview = calcTimeSpent(mr.created_at, mr.merged_at);
 
       return { 
         id: mr.iid, 
         projectId: mr.project_id, 
         author: mr.author.name,
-        timeInCodeReview: formatTime(timeSpentInCodeReview) } 
+        timeInCodeReview: formatTime(timeSpentInCodeReview),
+        createdAt: mr.created_at } 
   });
 
   return new Promise((resolve, _) => {
@@ -72,53 +73,68 @@ Promise.all(mergeRequestPromises)
   .then(notes => { 
     // Set approvals
     approvals = notes.flat(2)
-      .filter(note => note.body == 'approved this merge request' || note.body == 'unapproved this merge request')
+      .filter(note => note.body == 'approved this merge request')
       .map(note => { 
         return  { name: note.author.name, id: note.author.id }
       });
     approvalsMap = countAndFormat(approvals)
 
     // Set comments
+    // This may be improved by using the /discussions endpoint.
+    // Some comments may be lost as they have type null even tho they are a comment. Need to test more.
     comments = notes.flat(2)
       .filter(note => isActualComment(note))
       .map(note => {
-       return { name:note.author.name, id: note.author.id, b: note.body }
+       return { name:note.author.name, id: note.author.id, body: note.body }
       });
     commentsMap = countAndFormat(comments);
 
     // Feekback Time
-    feedbackTimes = mergeRequests.map(mr => {
-      const validNotes = notes
-        .flat(2)
+    feedbackTimes = mergeRequests.map((mr, i) => {
+
+      const validNotes = notes[i]
         .filter(note => isValidNote(note, mr))
-
-      // console.log(validNotes);s
-
-      if (validNotes.length > 0) {
-        validNotes.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-        
-      // console.log(validNotes[0])
+        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  
+      const firstValidNote = validNotes[0];
+  
+      if (firstValidNote) {
+        const timeSpent = calcTimeSpent(mr.createdAt, firstValidNote.created_at);
+        return {
+          mrId: mr.id, 
+          noteId: firstValidNote.id, 
+          feedbackTime: timeSpent
+        };
       }
-
+      // If no valid note exists, return null
+      return null;
     });
+  
+    // Remove null values if any exist
+    feedbackTimes = feedbackTimes.filter(time => time !== null);
 
+    // Calc average feedback time
+    averageFeedbackTime = formatTime(feedbackTimes.reduce((acc, curr) => {
+      return  acc + curr.feedbackTime;
+    }, 0) / feedbackTimes.length);
 
 
 
     codeReview = {
       timeInterval: `${startDate} - ${endDate}`,
+      averageTimeInCR: averageTime,
+      averageFeedbackTime: averageFeedbackTime,
       approvals : approvalsMap,
       comments: commentsMap
     }
-
-    console.log(averageTime);
+    console.log(codeReview);
   });
 
 
   const countAndFormat = (array) => {
     return array.reduce((acc, curr) => {
       const { id, name } = curr;
-      const key = name;
+      const key = name.split(" ")[0];
       if (key in acc) {
         acc[key].count += 1;
       } else {
@@ -129,8 +145,8 @@ Promise.all(mergeRequestPromises)
   }
 
   // Time Helper Functions
-  const calcTimeSpent = (createdAt, mergedAt, id) => {
-    if (mergedAt == null) return null;
+  const calcTimeSpent = (createdAt, mergedAt) => {
+    if (mergedAt === null) return null;
 
     const created = moment(createdAt);
     const merged = moment(mergedAt);
@@ -164,7 +180,7 @@ Promise.all(mergeRequestPromises)
 
 
   const formatTime = (milliseconds) => {
-    if (milliseconds == null) return 'Not yet merged';
+    if (milliseconds === null) return 'Not yet merged';
     // return moment.duration(milliseconds).humanize()
     const duration = moment.duration(milliseconds);
     return { 
@@ -174,7 +190,6 @@ Promise.all(mergeRequestPromises)
     }
   }
 
-  // Comments Helper functions
   const isActualComment = (note) => {
     // Check if the note is not a system-generated note
     if (
@@ -190,18 +205,10 @@ Promise.all(mergeRequestPromises)
     return isValidLength;
   };
 
-  // Notes Helper functions
-
   const isValidNote = (note, mr) => {
-    const isApprovalRelated = note.body.includes('approved this merge request') || note.body.includes('unapproved this merge request');
-
-    if (!note.system || isApprovalRelated) {
-      return note.author.username !== mr.author;
-    }
-
-    return false;
+    // A valid note for feedback time, is a note created by another team member, non system, unless is the one about approving a MR.
+    return (!note.system && note.author.name !== mr.author) || 
+    (note.author.name !== mr.author && 
+    (note.body.includes('approved this merge request') || 
+    note.body.includes('unapproved this merge request')));
   }
-
-
-  
-  
