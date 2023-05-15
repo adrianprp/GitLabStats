@@ -10,12 +10,9 @@ const params = {
 
 const PROJECT_IDS = ['2282', '2061', '2523', '2070'];
 
-const endDate = new Date();
-const last5Days = moment().subtract(5, 'days');
-const lastMonth = moment().subtract(1, 'month');
-
-const startDateTest = new Date('05/01/2023');
-const endDateTest = new Date('05/06/2023');
+// Span of time
+const startDate = new Date('05/01/2023');
+const endDate = new Date('05/08/2023');
 
 const RequestHeaders = {
   "Accept": "application/json",
@@ -34,38 +31,46 @@ let commentsMap;
 
 let timeSpentInCodeReview;
 let averageTime;
+let feedbackTimes = [];
+let averageFeedbackTime;
 let codeReview;
 
 const gitLab = new GitLab(params.url, RequestHeaders);
 
 // Get the merge requests made in the specified time frame, for all of the projects.
-PROJECT_IDS.forEach(id => mergeRequestPromises.push(gitLab.getMergeRequests(id, startDateTest.toISOString(), endDateTest.toISOString())));
+PROJECT_IDS.forEach(id => mergeRequestPromises.push(gitLab.getMergeRequests(id, startDate.toISOString(), endDate.toISOString())));
 
 Promise.all(mergeRequestPromises)
   .then((allMergeRequests) => {
 
+
+  // Get the average time a MR spends in CR
   let listOfMrs =  allMergeRequests.flat(2).filter(mr => mr.merged_at != null);
-  averageTime = formatTime(listOfMrs
-    .reduce((acc, curr) => {
-      let timeSpent = calcTimeSpent(curr.created_at, curr.merged_at);
-      return acc + +timeSpent.diff;
-    }, 0) / listOfMrs.length);
+  averageTime = formatTime(listOfMrs 
+  .reduce((acc, curr) => {
+    let timeSpent = calcTimeSpent(curr.created_at, curr.merged_at);
+    return acc + timeSpent;
+  }, 0) / listOfMrs.length);
 
   mergeRequests = allMergeRequests
     .flat(2)
-    // .filter( mr => new Date(mr.created_at) > startDateTest )
     .map(mr => { 
-      timeSpentInCodeReview = calcTimeSpent(mr.created_at, mr.merged_at);
+      timeSpentInCodeReview = calcTimeSpent(mr.created_at, mr.merged_at,  mr.iid);
 
-      return { id: mr.iid, projectId: mr.project_id, timeInCodeReview: timeSpentInCodeReview } 
+      return { 
+        id: mr.iid, 
+        projectId: mr.project_id, 
+        author: mr.author.name,
+        timeInCodeReview: formatTime(timeSpentInCodeReview) } 
   });
 
   return new Promise((resolve, _) => {
     mergeRequests.forEach(mr => notesPromises.push(gitLab.getNotes(mr.projectId, mr.id)));
-    resolve( Promise.all(notesPromises));
+    resolve(Promise.all(notesPromises));
   })
 })
   .then(notes => { 
+    // Set approvals
     approvals = notes.flat(2)
       .filter(note => note.body == 'approved this merge request' || note.body == 'unapproved this merge request')
       .map(note => { 
@@ -73,6 +78,7 @@ Promise.all(mergeRequestPromises)
       });
     approvalsMap = countAndFormat(approvals)
 
+    // Set comments
     comments = notes.flat(2)
       .filter(note => isActualComment(note))
       .map(note => {
@@ -80,60 +86,122 @@ Promise.all(mergeRequestPromises)
       });
     commentsMap = countAndFormat(comments);
 
+    // Feekback Time
+    feedbackTimes = mergeRequests.map(mr => {
+      const validNotes = notes
+        .flat(2)
+        .filter(note => isValidNote(note, mr))
+
+      // console.log(validNotes);s
+
+      if (validNotes.length > 0) {
+        validNotes.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+        
+      // console.log(validNotes[0])
+      }
+
+    });
+
+
+
+
     codeReview = {
-      timeInterval: `${startDateTest} - ${endDateTest}`,
+      timeInterval: `${startDate} - ${endDate}`,
       approvals : approvalsMap,
       comments: commentsMap
     }
 
-    console.log(codeReview);
+    console.log(averageTime);
   });
 
 
-const countAndFormat = (array) => {
-  return array.reduce((acc, curr) => {
-    const { id, name } = curr;
-    const key = name;
-    if (key in acc) {
-      acc[key].count += 1;
-    } else {
-      acc[key] = { id, count: 1 };
-    }
-    return acc;
-  }, {});
-}
-
+  const countAndFormat = (array) => {
+    return array.reduce((acc, curr) => {
+      const { id, name } = curr;
+      const key = name;
+      if (key in acc) {
+        acc[key].count += 1;
+      } else {
+        acc[key] = { id, count: 1 };
+      }
+      return acc;
+    }, {});
+  }
 
   // Time Helper Functions
-const calcTimeSpent = (createdAt, mergedAt) => {
-  if (mergedAt == null) return null;
+  const calcTimeSpent = (createdAt, mergedAt, id) => {
+    if (mergedAt == null) return null;
 
-  momentBDays.updateLocale('ro', {
-    workingWeekdays: [1, 2, 3, 4, 5]
-  });
+    const created = moment(createdAt);
+    const merged = moment(mergedAt);
 
-  const time =  moment(mergedAt).businessDiff(moment(createdAt));
-  return formatTime(time);
-}
+    if (created.day() == merged.day()) {
+      let timeSpent = merged.diff(created);
+      return timeSpent;
+    } 
+    return businessDaysDifference(created, merged) * 86400000;
+  }
 
-const formatTime = (time) => {
-  const duration = moment.duration(time);
-  return { days: duration.asDays(), hours: duration.asHours(), minutes: duration.asMinutes(), diff: time };
-}
+  const businessDaysDifference = (startDate, endDate) => {
+    momentBDays.updateLocale('ro', {
+      workingWeekdays: [1, 2, 3, 4, 5]
+    });
+    let businessDays = 0;
+    let current = startDate.clone();
+
+    while (current.isBefore(endDate)) {
+      if (current.isBusinessDay()) {
+        businessDays++;
+      }
+      current.add(1, 'day');
+    }
+
+    const remainingHours = endDate.diff(current.subtract(1, 'day'), 'hours', true);
+    const fractionalDay = remainingHours / 24;
+
+    return businessDays + fractionalDay;
+  }
+
+
+  const formatTime = (milliseconds) => {
+    if (milliseconds == null) return 'Not yet merged';
+    // return moment.duration(milliseconds).humanize()
+    const duration = moment.duration(milliseconds);
+    return { 
+      days: duration.get('days'),
+      hours: duration.get('hours'),
+      mins: duration.get('minutes') 
+    }
+  }
 
   // Comments Helper functions
-const isActualComment = (note) => {
-  // Check if the note is not a system-generated note
-  if (
-    note.system ||
-    !(note.type === "Discussion" || note.type === "DiffNote" || note.type === "DiscussionNote")
-  ) {
+  const isActualComment = (note) => {
+    // Check if the note is not a system-generated note
+    if (
+      note.system ||
+      !(note.type === "Discussion" || note.type === "DiffNote" || note.type === "DiscussionNote")
+    ) {
+      return false;
+    }
+
+    // Check if the comment is meaningful
+    const minLength = 10;
+    const isValidLength = note.body.trim().length >= minLength;
+    return isValidLength;
+  };
+
+  // Notes Helper functions
+
+  const isValidNote = (note, mr) => {
+    const isApprovalRelated = note.body.includes('approved this merge request') || note.body.includes('unapproved this merge request');
+
+    if (!note.system || isApprovalRelated) {
+      return note.author.username !== mr.author;
+    }
+
     return false;
   }
 
-  // Check if the comment is meaningful
-  const minLength = 10;
-  const isValidLength = note.body.trim().length >= minLength;
-  return isValidLength;
-};
+
+  
   
