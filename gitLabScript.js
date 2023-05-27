@@ -10,9 +10,14 @@ const params = {
 
 const PROJECT_IDS = ['2282', '2061', '2523', '2070'];
 
-// Span of time
-const startDate = new Date('05/08/2023 08:00');
-const endDate = new Date('05/15/2023 20:00');
+// Weekly Span of time.
+const startDate = new Date('05/01/2023 08:00');
+const endDate = new Date('05/26/2023 20:00');
+
+// Monthly Span of time.
+const startOfYearDate = new Date('01/01/2023 08:00');
+const startDateCurrentMonth = new Date('05/01/2023 08:00')
+const presentDate = moment();
 
 const RequestHeaders = {
   "Accept": "application/json",
@@ -20,22 +25,41 @@ const RequestHeaders = {
 };
 
 const mergeRequestPromises = [];
+const averageMergeRequests = [];
 const notesPromises = [];
 
 let mergeRequests = [];
-let approvals = [];
-let comments = [];
+let yearToDateMrs = [];
 
-let approvalsMap;
-let commentsMap;
+let approvals;
+let comments;
 
 let timeSpentInCodeReview;
 let averageTime;
+let deltaAverageTime;
 let feedbackTimes = [];
 let averageFeedbackTime;
 let codeReview;
 
 const gitLab = new GitLab(params.url, RequestHeaders);
+
+
+PROJECT_IDS.forEach(id => averageMergeRequests.push(gitLab.getMergeRequests(id, startOfYearDate.toISOString(), presentDate.toISOString())));
+
+Promise.all(averageMergeRequests)
+  .then((mergeRequests) => {
+    yearToDateMrs = formatMergeRequests(mergeRequests);
+
+    const yearToStartOfMonthMrs = yearToDateMrs.filter(mr => {
+     let date = moment(mr.createdAt);
+      return date.month() !== startDateCurrentMonth.getMonth();
+    });
+
+    deltaAverageTime = formatTime(calcAverageTime(yearToDateMrs) - calcAverageTime(yearToStartOfMonthMrs));
+    
+
+    console.log(codeReview);
+})
 
 // Get the merge requests made in the specified time frame, for all of the projects.
 PROJECT_IDS.forEach(id => mergeRequestPromises.push(gitLab.getMergeRequests(id, startDate.toISOString(), endDate.toISOString())));
@@ -43,27 +67,7 @@ PROJECT_IDS.forEach(id => mergeRequestPromises.push(gitLab.getMergeRequests(id, 
 Promise.all(mergeRequestPromises)
   .then((allMergeRequests) => {
 
-
-  // Get the average time a MR spends in CR
-  let listOfMrs =  allMergeRequests.flat(2).filter(mr => mr.merged_at !== null);
-  averageTime = formatTime(listOfMrs 
-  .reduce((acc, curr) => {
-    let timeSpent = calcTimeSpent(curr.created_at, curr.merged_at);
-    return acc + timeSpent;
-  }, 0) / listOfMrs.length);
-
-  mergeRequests = allMergeRequests
-    .flat(2)
-    .map(mr => { 
-      timeSpentInCodeReview = calcTimeSpent(mr.created_at, mr.merged_at);
-
-      return { 
-        id: mr.iid, 
-        projectId: mr.project_id, 
-        author: mr.author.name,
-        timeInCodeReview: formatTime(timeSpentInCodeReview),
-        createdAt: mr.created_at } 
-  });
+  mergeRequests  = formatMergeRequests(allMergeRequests);
 
   return new Promise((resolve, _) => {
     mergeRequests.forEach(mr => notesPromises.push(gitLab.getNotes(mr.projectId, mr.id)));
@@ -72,22 +76,10 @@ Promise.all(mergeRequestPromises)
 })
   .then(notes => { 
     // Set approvals
-    approvals = notes.flat(2)
-      .filter(note => note.body == 'approved this merge request')
-      .map(note => { 
-        return  { name: note.author.name, id: note.author.id }
-      });
-    approvalsMap = countAndFormat(approvals)
+    approvals = setApprovals(notes);
 
     // Set comments
-    // This may be improved by using the /discussions endpoint.
-    // Some comments may be lost as they have type null even tho they are a comment. Need to test more.
-    comments = notes.flat(2)
-      .filter(note => isActualComment(note))
-      .map(note => {
-       return { name:note.author.name, id: note.author.id, body: note.body }
-      });
-    commentsMap = countAndFormat(comments);
+    comments = setComments(notes);
 
     // Feekback Time
     feedbackTimes = mergeRequests.map((mr, i) => {
@@ -97,9 +89,10 @@ Promise.all(mergeRequestPromises)
         .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   
       const firstValidNote = validNotes[0];
-  
+
       if (firstValidNote) {
         const timeSpent = calcTimeSpent(mr.createdAt, firstValidNote.created_at);
+        
         return {
           mrId: mr.id, 
           noteId: firstValidNote.id, 
@@ -109,28 +102,88 @@ Promise.all(mergeRequestPromises)
       // If no valid note exists, return null
       return null;
     });
-  
-    // Remove null values if any exist
-    feedbackTimes = feedbackTimes.filter(time => time !== null);
 
     // Calc average feedback time
-    averageFeedbackTime = formatTime(feedbackTimes.reduce((acc, curr) => {
-      return  acc + curr.feedbackTime;
-    }, 0) / feedbackTimes.length);
-
-
+    averageFeedbackTime = calcAverageFeedbackTime();
 
     codeReview = {
-      timeInterval: `${startDate} - ${endDate}`,
-      averageTimeInCR: averageTime,
-      averageFeedbackTime: averageFeedbackTime,
-      approvals : approvalsMap,
-      comments: commentsMap
-    }
-    console.log(codeReview);
+      "Period": `${startDate} - ${endDate}`,
+      "Delta Average Time": deltaAverageTime,
+      "Average Feedback Time": averageFeedbackTime,
+      approvals : approvals,
+      comments: comments
+    }    
   });
 
+  const formatMergeRequests = (mergeRequests) => {
+   return mergeRequests
+    .flat(2)
+    .map(mr => { 
+      timeSpentInCodeReview = calcTimeSpent(mr.created_at, mr.merged_at);
 
+      return { 
+        id: mr.iid, 
+        projectId: mr.project_id, 
+        author: mr.author.name,
+        timeInCodeReview: formatTime(timeSpentInCodeReview),
+        createdAt: mr.created_at,
+        mergedAt: mr.merged_at
+       }})
+  }
+
+  const calcAverageTime = (listOfMrs) => {
+    let notYetMerged = 0;
+    // Get the average time a MR spends in CR
+    let totalTime = listOfMrs.reduce((acc, curr) => {
+      if (curr.timeInCodeReview == "Not yet merged") {
+        notYetMerged++;
+        return acc;
+      }
+      let timeSpent = calcTimeSpent(curr.createdAt, curr.mergedAt);
+      return acc + timeSpent;
+    }, 0);
+
+    return totalTime / (listOfMrs.length - notYetMerged);
+  }
+
+  const calcAverageFeedbackTime = () => {
+    let notInteractedWith = 0;
+    let totalFeedbackTime = feedbackTimes.reduce((acc, curr) => {
+
+      if (curr == null) {
+        notInteractedWith++;
+        return acc;
+      }
+      return  acc + curr.feedbackTime;
+    }, 0);
+
+    return formatTime(totalFeedbackTime / (feedbackTimes.length - notInteractedWith));
+  }
+
+ const setApprovals = (notes) => {
+  let approvals = [];
+  approvals = notes.flat(2)
+      .filter(note => note.body == 'approved this merge request')
+      .map(note => { 
+        return  { name: note.author.name, id: note.author.id }
+      });
+  return countAndFormat(approvals)
+ }
+
+  const setComments = (notes) => {
+    let comments = [];
+    // This may be improved by using the /discussions endpoint.
+    // Some comments may be lost as they have type null even tho they are a comment. Need to test more.
+    comments =  notes.flat(2)
+      .filter(note => isActualComment(note))
+      .map(note => {
+       return { name:note.author.name, id: note.author.id, body: note.body }
+      });
+    return countAndFormat(comments);
+  }
+
+
+  // ------ Helper Functions ------ 
   const countAndFormat = (array) => {
     return array.reduce((acc, curr) => {
       const { id, name } = curr;

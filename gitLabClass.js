@@ -4,8 +4,8 @@ import fetch from 'node-fetch';
 export class GitLab {
 
 	constructor(url, headers) {
-			this.url = new URL(url);
-			this.headers = headers;
+		this.url = new URL(url);
+		this.headers = headers;
 	}
 
 	getMergeRequests(projectId, startDate, endDate) {
@@ -42,6 +42,34 @@ export class GitLab {
 			return new Promise((resolve, reject) => {
 				fetch(
 					`${this.url}api/v4/projects/${projectId}/merge_requests/${mergeReqId}/notes?per_page=100&page=${page}`,
+					{ headers: this.headers }
+				)
+					.then((res) => {
+						const totalPages = parseInt(res.headers.get('X-Total-Pages'), 10);
+
+						res.json().then((notes) => {
+							if (page < totalPages) {
+								fetchPage(page + 1).then((nextPageNotes) => {
+									resolve(notes.concat(nextPageNotes));
+								});
+							} else {
+								resolve(notes);
+							}
+						});
+					})
+					.catch((error) => {
+						reject(error);
+					});
+			});
+		}
+		return fetchPage(1);
+	}
+
+	getDiscussions(projectId, mergeReqId) {
+		const fetchPage = (page) => {
+			return new Promise((resolve, reject) => {
+				fetch(
+					`${this.url}api/v4/projects/${projectId}/merge_requests/${mergeReqId}/discussions?per_page=100&page=${page}`,
 					{ headers: this.headers }
 				)
 					.then((res) => {
