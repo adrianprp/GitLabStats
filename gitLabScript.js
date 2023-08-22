@@ -1,18 +1,21 @@
 'use strict';
 import { GitLab }  from './gitLabClass.js';
+import { ChartGenerator } from './chartScript.js';
 import  moment  from 'moment';
 import  momentBDays   from 'moment-business-days';
 
 const params = {
   token : process.env.GITLAB_TOKEN,
-  url : process.env.GITLAB_URL
+  url : process.env.GITLAB_URL,
+  emailUser: process.env.EMAIL_USER,
+  emailPass: process.env.EMAIL_PASS
 };
 
 const PROJECT_IDS = ['2282', '2061', '2523', '2070'];
 
 // Weekly Span of time.
-const startDate = new Date('05/01/2023 08:00');
-const endDate = new Date('05/26/2023 20:00');
+const startDate = new Date('05/22/2023 08:00');
+const endDate = new Date('05/29/2023 20:00');
 
 // Monthly Span of time.
 const startOfYearDate = new Date('01/01/2023 08:00');
@@ -25,8 +28,9 @@ const RequestHeaders = {
 };
 
 const mergeRequestPromises = [];
-const averageMergeRequests = [];
+const yearToDateMergeRequests = [];
 const notesPromises = [];
+const disscusionsPromises = [];
 
 let mergeRequests = [];
 let yearToDateMrs = [];
@@ -36,6 +40,7 @@ let comments;
 
 let timeSpentInCodeReview;
 let averageTime;
+let averageYearToStartOfMonth;
 let deltaAverageTime;
 let feedbackTimes = [];
 let averageFeedbackTime;
@@ -44,9 +49,12 @@ let codeReview;
 const gitLab = new GitLab(params.url, RequestHeaders);
 
 
-PROJECT_IDS.forEach(id => averageMergeRequests.push(gitLab.getMergeRequests(id, startOfYearDate.toISOString(), presentDate.toISOString())));
+PROJECT_IDS.forEach(id => yearToDateMergeRequests.push(gitLab.getMergeRequests(id, startOfYearDate.toISOString(), presentDate.toISOString())));
 
-Promise.all(averageMergeRequests)
+// Get the merge requests made in the specified time frame, for all of the projects.
+PROJECT_IDS.forEach(id => mergeRequestPromises.push(gitLab.getMergeRequests(id, startDate.toISOString(), endDate.toISOString())));
+
+Promise.all(yearToDateMergeRequests)
   .then((mergeRequests) => {
     yearToDateMrs = formatMergeRequests(mergeRequests);
 
@@ -55,16 +63,12 @@ Promise.all(averageMergeRequests)
       return date.month() !== startDateCurrentMonth.getMonth();
     });
 
+    averageYearToStartOfMonth = formatTime(calcAverageTime(yearToDateMrs));
+
     deltaAverageTime = formatTime(calcAverageTime(yearToDateMrs) - calcAverageTime(yearToStartOfMonthMrs));
-    
 
-    console.log(codeReview);
+    return Promise.all(mergeRequestPromises);
 })
-
-// Get the merge requests made in the specified time frame, for all of the projects.
-PROJECT_IDS.forEach(id => mergeRequestPromises.push(gitLab.getMergeRequests(id, startDate.toISOString(), endDate.toISOString())));
-
-Promise.all(mergeRequestPromises)
   .then((allMergeRequests) => {
 
   mergeRequests  = formatMergeRequests(allMergeRequests);
@@ -77,9 +81,6 @@ Promise.all(mergeRequestPromises)
   .then(notes => { 
     // Set approvals
     approvals = setApprovals(notes);
-
-    // Set comments
-    comments = setComments(notes);
 
     // Feekback Time
     feedbackTimes = mergeRequests.map((mr, i) => {
@@ -102,18 +103,36 @@ Promise.all(mergeRequestPromises)
       // If no valid note exists, return null
       return null;
     });
-
     // Calc average feedback time
     averageFeedbackTime = calcAverageFeedbackTime();
 
+    return new Promise((resolve, _) => {
+      mergeRequests.forEach(mr => disscusionsPromises.push(gitLab.getDiscussions(mr.projectId, mr.id)));
+      resolve(Promise.all(notesPromises));
+    })
+  })
+  .then(disscusions => {
+    // Set comments
+    comments = setComments(disscusions);
+
     codeReview = {
       "Period": `${startDate} - ${endDate}`,
-      "Delta Average Time": deltaAverageTime,
+      "Average Time year to start of month": averageYearToStartOfMonth  ,
+      "Delta Average Time - this month": deltaAverageTime,
       "Average Feedback Time": averageFeedbackTime,
       approvals : approvals,
       comments: comments
     }    
-  });
+
+    console.log(codeReview)
+    //Create the Graphs
+    const approvalsGenerator = new ChartGenerator(codeReview.approvals, 'Approvals');
+    approvalsGenerator.createChart();
+
+    const commentsGenerator = new ChartGenerator(codeReview.comments, 'Comments');
+    commentsGenerator.createChart();
+  })
+
 
   const formatMergeRequests = (mergeRequests) => {
    return mergeRequests
@@ -162,22 +181,24 @@ Promise.all(mergeRequestPromises)
 
  const setApprovals = (notes) => {
   let approvals = [];
+  const eligibleAuthors = ['Sebastian Strulea', 'Adrian Pripon', 'Dragos Bodea', 'Raul Vasile', 'Catalin Poclid', 'Cristian Taloi', 'Panu Umbangtalad'];
+
   approvals = notes.flat(2)
-      .filter(note => note.body == 'approved this merge request')
+      .filter(note => note.body == 'approved this merge request' && eligibleAuthors.includes(note.author.name))
       .map(note => { 
         return  { name: note.author.name, id: note.author.id }
       });
   return countAndFormat(approvals)
  }
 
-  const setComments = (notes) => {
+  const setComments = (disscusions) => {
     let comments = [];
     // This may be improved by using the /discussions endpoint.
     // Some comments may be lost as they have type null even tho they are a comment. Need to test more.
-    comments =  notes.flat(2)
-      .filter(note => isActualComment(note))
-      .map(note => {
-       return { name:note.author.name, id: note.author.id, body: note.body }
+    comments =  disscusions.flat(2)
+      .filter(disscusion => isActualComment(disscusion))
+      .map(disscusion => {
+       return { name:disscusion.author.name, id: disscusion.author.id, body: disscusion.body }
       });
     return countAndFormat(comments);
   }
