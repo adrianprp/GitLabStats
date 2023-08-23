@@ -206,7 +206,6 @@ Promise.all(yearToDateMergeRequests)
     comments =  disscusions.flat(2)
       .filter(disscusion => isActualComment(disscusion) && eligibleAuthors.includes(disscusion.author.name))
       .map(disscusion => {
-        console.log(disscusion)
        return { name:disscusion.author.name, id: disscusion.author.id, body: disscusion.body }
       });
     return countAndFormat(comments);
