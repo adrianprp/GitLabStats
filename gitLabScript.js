@@ -12,14 +12,15 @@ const params = {
 };
 
 const PROJECT_IDS = ['2282', '2061', '2523', '2070'];
+const eligibleAuthors = ['Sebastian Strulea', 'Adrian Pripon', 'Dragos Bodea', 'Raul Vasile', 'Catalin Poclid', 'Cristian Taloi', 'Panu Umbangtalad'];
 
 // Weekly Span of time.
-const startDate = new Date('05/22/2023 08:00');
-const endDate = new Date('05/29/2023 20:00');
+const startDate = new Date('08/14/2023 08:00');
+const endDate = new Date('08/29/2023 20:00');
 
-// Monthly Span of time.
+// Year to start of month.
 const startOfYearDate = new Date('01/01/2023 08:00');
-const startDateCurrentMonth = new Date('05/01/2023 08:00')
+const startDateCurrentMonth = new Date('08/01/2023 08:00')
 const presentDate = moment();
 
 const RequestHeaders = {
@@ -40,6 +41,7 @@ let comments;
 
 let timeSpentInCodeReview;
 let averageTime;
+
 let averageYearToStartOfMonth;
 let deltaAverageTime;
 let feedbackTimes = [];
@@ -122,9 +124,18 @@ Promise.all(yearToDateMergeRequests)
       "Average Feedback Time": averageFeedbackTime,
       approvals : approvals,
       comments: comments
-    }    
+    }
+    
+    const authors = eligibleAuthors.map(author => author.split(' ')[0]);
+    authors.forEach(author => {
+      if (!codeReview.approvals[author]) {
+        codeReview.approvals[author] = { count: 0 };
+      }
+      if (!codeReview.comments[author]) {
+        codeReview.comments[author] = { count: 0 };
+      }
+    });
 
-    console.log(codeReview)
     //Create the Graphs
     const approvalsGenerator = new ChartGenerator(codeReview.approvals, 'Approvals');
     approvalsGenerator.createChart();
@@ -181,7 +192,6 @@ Promise.all(yearToDateMergeRequests)
 
  const setApprovals = (notes) => {
   let approvals = [];
-  const eligibleAuthors = ['Sebastian Strulea', 'Adrian Pripon', 'Dragos Bodea', 'Raul Vasile', 'Catalin Poclid', 'Cristian Taloi', 'Panu Umbangtalad'];
 
   approvals = notes.flat(2)
       .filter(note => note.body == 'approved this merge request' && eligibleAuthors.includes(note.author.name))
@@ -193,11 +203,10 @@ Promise.all(yearToDateMergeRequests)
 
   const setComments = (disscusions) => {
     let comments = [];
-    // This may be improved by using the /discussions endpoint.
-    // Some comments may be lost as they have type null even tho they are a comment. Need to test more.
     comments =  disscusions.flat(2)
-      .filter(disscusion => isActualComment(disscusion))
+      .filter(disscusion => isActualComment(disscusion) && eligibleAuthors.includes(disscusion.author.name))
       .map(disscusion => {
+        console.log(disscusion)
        return { name:disscusion.author.name, id: disscusion.author.id, body: disscusion.body }
       });
     return countAndFormat(comments);
